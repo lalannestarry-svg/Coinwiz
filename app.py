@@ -64,4 +64,4 @@ guide = load_priceguide()
 # ------------------------- UI -------------------------
 st.title(APP_NAME)
 st.write("Upload a coin photo or use the camera, then press Appraise.")
-st.stop()
+# st.stop()
