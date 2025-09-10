@@ -1,39 +1,3 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-from PIL import Image, ImageOps
-import pytesseract
-
-APP_NAME = "🪙 CoinWiz — OCR + Appraiser"
-st.set_page_config(page_title=APP_NAME, page_icon="🪙", layout="wide")
-
-# ---------------- helpers ----------------
-@st.cache_data
-def load_guide():
-    try:
-        df = pd.read_csv("price_guide.csv")
-        df.columns = [c.strip().lower() for c in df.columns]
-        return df
-    except Exception:
-        return pd.DataFrame()
-
-def norm(s): return str(s or "").strip().lower()
-
-def match_row(df, country, denom, year, mint, grade):
-    if df.empty: return None
-    q = (
-        (df["country"].str.lower() == norm(country)) &
-        (df["denomination"].str.lower() == norm(denom)) &
-        (df["year"].astype(str).str.strip() == str(year).strip())
-    )
-    cand = df[q]
-    if mint:
-        exact = cand[cand["mint"].astype(str).str.lower() == norm(mint)]
-        if not exact.empty:
-            cand = exact
-    if grade:
-        g = grade.upper()
-        exact = cand[cand["grade"].astype(str).str.upper() == g]
         if not exact.empty:
             cand = exact
     if cand.empty: return None
