@@ -1,20 +1,54 @@
-country,denomination,year,mint,price
-united states,penny,2022,d,0.01
-united states,quarter,1932,d,120.00
-united states,quarter,1932,s,140.00
-united states,quarter,1932,,30.00
-united states,morgan dollar,1921,,35.00
-united states,lincoln cent,1909,s,950.00
-canada,quarter,1967,,4.00
-united states,penny,2022,D,0.01
-United States,penny,2022,d,0.01
-united states,cent,2022,D,0.01
-United States,cent,2022,d,0.01
-united states,penny,2022,d,0.01
-united states,penny,2022,D,0.01
-United States,penny,2022,d,0.01
-United States,penny,2022,D,0.01
-united states,cent,2022,d,0.01
-united states,cent,2022,D,0.01
-United States,cent,2022,d,0.01
-United States,cent,2022,D,0.01
+country,denomination,year,mint,grade,price
+united states,penny,1909,s,VF,325
+united states,penny,1909,s,XF,450
+united states,penny,1958,,MS,0.25
+united states,penny,1969,s,MS,15000
+united states,penny,1982,,MS,0.15
+united states,penny,1995,,MS,4
+united states,penny,2009,p,MS,2
+united states,penny,2022,d,XF,0.05
+united states,penny,2022,d,MS,1.5
+
+united states,nickel,1938,,VF,2
+united states,nickel,1937,d,VG,120
+united states,nickel,1942,p,VF,2
+united states,nickel,1943,p,VF,2
+united states,nickel,1950,d,MS,30
+united states,nickel,2004,p,MS,1
+united states,nickel,2005,p,MS,1
+
+united states,dime,1916,d,G,90
+united states,dime,1916,d,VF,250
+united states,dime,1946,,VF,2
+united states,dime,1964,,VF,3
+united states,dime,1964,,MS,8
+united states,dime,2000,p,MS,1
+
+united states,quarter,1932,,VF,30
+united states,quarter,1932,d,XF,225
+united states,quarter,1932,s,XF,260
+united states,quarter,1964,,VF,7
+united states,quarter,1964,,MS,12
+united states,quarter,1967,,VF,2
+united states,quarter,1986,,VF,3
+united states,quarter,1999,p,MS,4
+united states,quarter,2000,p,MS,4
+
+united states,half dollar,1917,,G,20
+united states,half dollar,1942,,VF,14
+united states,half dollar,1964,,VF,15
+united states,half dollar,1964,,MS,28
+united states,half dollar,1967,,VF,6
+united states,half dollar,2003,p,MS,2
+
+united states,morgan dollar,1878,,VF,55
+united states,morgan dollar,1881,s,MS,120
+united states,morgan dollar,1893,s,F,450
+united states,morgan dollar,1921,,VF,40
+
+united states,peace dollar,1922,,VF,35
+united states,peace dollar,1923,,VF,35
+united states,peace dollar,1934,s,F,140
+
+canada,quarter,1967,,XF,4
+canada,penny,1964,,MS,0.5
