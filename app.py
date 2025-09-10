@@ -1,8 +1,7 @@
 if not exact.empty:
    cand = exact
-if cand.empty: return None.               
-   return cand.iloc[0].to_dict()
-def verdict(value):
+if cand.empty: return None. return cand.iloc[0].to_dict()
+ def verdict(value):
     if value is None: return "No match", "Add this coin to price_guide.csv"
     if value >= 100: return "Good 💎", "Potentially valuable!"
     if value >= 10: return "Maybe 🤔", "Worth a closer look."
