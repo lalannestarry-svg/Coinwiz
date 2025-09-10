@@ -1,9 +1,5 @@
-streamlit>=1.33
+streamlit
 pandas
 numpy
-Pillow
-opencv-python-headless
-easyocr==1.7.1
-torch==2.2.2+cpu
-torchvision==0.17.2+cpu
---extra-index-url https://download.pytorch.org/whl/cpu
+pillow
+pytesseract
