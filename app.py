@@ -1,6 +1,6 @@
-        if not exact.empty:
-            cand = exact
-    if cand.empty: return None
+if not exact.empty:
+   cand = exact
+if cand.empty: return None
     return cand.iloc[0].to_dict()
 
 def verdict(value):
