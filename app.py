@@ -1,144 +1,221 @@
 from __future__ import annotations
-import io
-import os
-from typing import Optional
+import io, os, re
+from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
 from PIL import Image, ImageOps
 import streamlit as st
 
-APP_NAME = "🪙 CoinWizard — Appraise with Verdict"
-st.set_page_config(page_title=APP_NAME, page_icon="🪙", layout="wide")
+# deps: easyocr + torch + opencv-headless
+import easyocr
+import cv2
 
-# ----------------------------- Helpers -----------------------------
-GRADE_ORDER = ["G","VG","F","VF","XF","AU","MS"]
-GRADE_MULT = {"G":0.25,"VG":0.4,"F":0.6,"VF":0.8,"XF":1.0,"AU":1.4,"MS":2.0}
-DENOM_SYNONYMS = {
-    "penny":"penny","cent":"penny","one cent":"penny",
-    "nickel":"nickel","five cent":"nickel",
-    "dime":"dime","ten cent":"dime",
-    "quarter":"quarter","25c":"quarter",
-    "half dollar":"half dollar","50c":"half dollar",
-    "dollar":"dollar","1 dollar":"dollar",
+APP_NAME = "🪙 CoinWiz — Snap → Identify → Appraise"
+st.set_page_config(page_title=APP_NAME, page_icon="🪙", layout="centered")
+
+# --------------------- Data loaders ---------------------
+@st.cache_resource(show_spinner=False)
+def ocr_reader():
+    return easyocr.Reader(["en"], gpu=False)
+
+@st.cache_data
+def load_guide(path: str = "price_guide.csv") -> pd.DataFrame:
+    if not os.path.exists(path):
+        return pd.DataFrame(columns=["country","denomination","year","mint","grade","price"])
+    df = pd.read_csv(path)
+    df.columns = [c.strip().lower() for c in df.columns]
+    for c in ["country","denomination","year","mint","grade"]:
+        if c not in df.columns:
+            df[c] = ""
+    if "price" not in df.columns:
+        df["price"] = np.nan
+    df["country"] = df["country"].astype(str).str.strip().str.lower()
+    df["denomination"] = df["denomination"].astype(str).str.strip().str.lower().replace({"cent":"penny"})
+    df["year"] = df["year"].astype(str).str.strip()
+    df["mint"] = df["mint"].astype(str).str.strip().str.lower()
+    df["grade"] = df["grade"].astype(str).str.strip().str.upper()
+    df["price"] = pd.to_numeric(df["price"], errors="coerce")
+    return df
+
+@st.cache_data
+def load_varieties(path: str = "varieties.csv") -> pd.DataFrame:
+    if not os.path.exists(path):
+        return pd.DataFrame(columns=["country","denomination","year","mint","variety","variety_code","markers","ref"])
+    df = pd.read_csv(path)
+    df.columns = [c.strip().lower() for c in df.columns]
+    for c in ["country","denomination","mint","variety","variety_code","markers","ref"]:
+        if c in df.columns:
+            df[c] = df[c].astype(str).str.strip().str.lower()
+    if "year" in df.columns:
+        df["year"] = df["year"].astype(str).str.strip()
+    return df
+
+# --------------------- OCR + heuristics ---------------------
+DENOM_WORDS = {
+    "penny": ["cent","one cent","lincoln","wheat","memorial","shield"],
+    "nickel": ["nickel","five cent","monticello","jefferson"],
+    "dime": ["dime","one dime","ten cent","roosevelt","mercury"],
+    "quarter": ["quarter","quarter dollar","25 c","25c","washington","state quarter"],
+    "half dollar": ["half dollar","50 c","50c","kennedy"],
+    "morgan dollar": ["morgan"],
+    "peace dollar": ["peace"],
+    "dollar": ["one dollar","1 dollar","eisenhower","susan","sacagawea","native"]
 }
+YEAR_RE = re.compile(r"\b(18|19|20)\d{2}\b")
 
-@st.cache_data(show_spinner=False)
-def load_guide() -> Optional[pd.DataFrame]:
-    # Look for a local CSV in repo root
-    for name in ["price_guide.csv", "prices.csv", "guide.csv"]:
-        if os.path.exists(name):
-            try:
-                df = pd.read_csv(name)
-                df.columns = [c.strip().lower() for c in df.columns]
-                # minimal required
-                req = {"country","denomination","year","mint","grade","price"}
-                if not req.issubset(df.columns):
-                    return None
-                # normalize types/strings
-                df = df.fillna("")
-                df["country"] = df["country"].astype(str).str.strip().str.lower()
-                df["denomination"] = df["denomination"].astype(str).str.strip().str.lower().map(lambda x: DENOM_SYNONYMS.get(x,x))
-                df["year"] = df["year"].astype(str).str.strip()
-                df["mint"] = df["mint"].astype(str).str.strip().str.lower()
-                df["grade"] = df["grade"].astype(str).str.strip().str.upper()
-                df["price"] = pd.to_numeric(df["price"], errors="coerce").fillna(0.0)
-                return df
-            except Exception:
-                return None
-    return None
+def guess_from_ocr(img: Image.Image) -> dict:
+    rdr = ocr_reader()
+    # modest resize for speed
+    W = 900
+    if img.width > W:
+        img = img.resize((W, int(img.height*W/img.width)))
+    text_blocks = rdr.readtext(np.array(img), detail=0, paragraph=True)
+    text = " ".join([t for t in text_blocks if isinstance(t,str)])
+    t = text.lower()
 
+    # year
+    year = None
+    m = YEAR_RE.search(t)
+    if m:
+        year = m.group(0)
 
-def lookup_price(df: pd.DataFrame, *, country: str, denom: str, year: str, mint: str, grade: str) -> Optional[float]:
-    # normalize inputs to match guide
-    country = str(country).strip().lower()
-    denom = DENOM_SYNONYMS.get(str(denom).strip().lower(), str(denom).strip().lower())
-    year = str(year).strip()
-    mint_l = str(mint).strip().lower()
-    grade = str(grade).strip().upper()
+    # mint mark (simple): D/S/P/W as standalone letters near date text
+    mint = None
+    for mm in ["d","s","p","w"]:
+        if re.search(rf"\b{mm}\b", t):
+            mint = mm; break
 
-    # exact match
-    q = (
-        (df["country"]==country) &
-        (df["denomination"]==denom) &
-        (df["year"]==year) &
-        (df["grade"]==grade)
-    )
+    # denomination by keywords
+    denom = None
+    best_score, best_d = 0, None
+    for d, kws in DENOM_WORDS.items():
+        sc = sum(1 for kw in kws if kw in t)
+        if sc > best_score:
+            best_score, best_d = sc, d
+    denom = best_d
+
+    return {"denomination": denom, "year": year, "mint": mint}
+
+# simple grade from sharpness/contrast (no ML)
+def grade_from_image(pil: Image.Image) -> str:
+    arr = np.array(pil.convert("RGB"))
+    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    sharp = cv2.Laplacian(gray, cv2.CV_64F).var()
+    if sharp > 650: return "MS"
+    if sharp > 450: return "AU"
+    if sharp > 300: return "XF"
+    if sharp > 180: return "VF"
+    if sharp > 100: return "F"
+    if sharp > 60:  return "VG"
+    return "G"
+
+# --------------------- Price + varieties ---------------------
+GRADE_ORDER = ["G","VG","F","VF","XF","AU","MS"]
+
+def pick_row(df: pd.DataFrame, country: str, denom: str, year: str, mint: str, grade: str) -> Optional[dict]:
+    if df.empty: return None
+    q = (df["country"]==country) & (df["denomination"]==denom) & (df["year"]==str(year))
     cand = df[q]
-    if len(cand):
-        # prefer mint match if present
-        with_mint = cand[cand["mint"]==mint_l]
-        if len(with_mint):
-            return float(with_mint.iloc[0]["price"]) 
-        # fallback: any mint if exact not found
-        return float(cand.iloc[0]["price"]) 
-    # fallback: ignore mint & grade, then scale by grade multiplier
-    q2 = (
-        (df["country"]==country) & (df["denomination"]==denom) & (df["year"]==year)
-    )
-    cand2 = df[q2]
-    if len(cand2):
-        base = float(cand2.iloc[0]["price"])  # treat CSV price as baseline
-        return base * GRADE_MULT.get(grade,1.0)
-    return None
+    if mint:
+        exact = cand[cand["mint"]==mint]
+        if len(exact): cand = exact
+    if grade in GRADE_ORDER and "grade" in cand.columns:
+        exact = cand[cand["grade"]==grade]
+        if len(exact): cand = exact
+    if cand.empty: return None
+    return cand.iloc[0].to_dict()
 
+def verdict_from_price(val: Optional[float], grade: str) -> str:
+    if val is None or np.isnan(val): return "Unknown"
+    if val >= 100: return "Good 💎"
+    if val >= 10 or grade in {"AU","MS"}: return "Maybe 🤔"
+    return "Common 💤"
 
-def verdict_from_price(price: float) -> tuple[str,str]:
-    # thresholds you can tune later
-    if price is None:
-        return ("No match", "We couldn’t find this coin in your guide. Add a row to price_guide.csv.")
-    if price >= 100:
-        return ("Good 💎", "Potentially valuable. Consider a professional grading or listing.")
-    if price >= 10:
-        return ("Maybe 🤔", "Worth a closer look; check for varieties and condition.")
-    return ("Skip 💤", "Common value. Keep if you’re collecting sets; otherwise low resale.")
-
-# ----------------------------- UI -----------------------------
+# --------------------- UI ---------------------
 st.title(APP_NAME)
-with st.sidebar:
-    st.header("How to use")
-    st.write("1) Add photo → 2) Fill fields → 3) Appraise → 4) See Verdict")
+st.caption("Zero typing: photo → OCR → value → variety alert")
+
+up = st.file_uploader("Upload coin photo", type=["jpg","jpeg","png","webp"])
+shot = st.camera_input("…or take a photo")
+img = None
+if up: img = Image.open(up).convert("RGB")
+elif shot: img = Image.open(shot).convert("RGB")
+
+if img is None:
+    st.info("Add a photo to begin.")
+    st.stop()
+
+img = ImageOps.exif_transpose(img)
+st.image(img, use_column_width=True)
+
+with st.status("Analyzing…", expanded=False) as s:
+    s.update(label="Reading text (OCR)…")
+    guess = guess_from_ocr(img)
+
+    s.update(label="Estimating grade…")
+    grade = grade_from_image(img)
+
+    # defaults/fallbacks
+    country = "united states"
+    denom   = (guess.get("denomination") or "quarter").lower()
+    year    = guess.get("year") or "1986"
+    mint    = (guess.get("mint") or "").lower()
+
+    s.update(label="Looking up price…")
     guide = load_guide()
-    st.success("Price guide loaded") if guide is not None else st.warning("No price_guide.csv found or wrong columns.")
+    row = pick_row(guide, country, denom, year, mint, grade)
+    val = float(row["price"]) if row and not pd.isna(row.get("price")) else None
 
-st.subheader("1) Add a coin photo")
-src = st.radio("Source", ["Upload photo", "Use camera"], horizontal=True)
-image: Optional[Image.Image] = None
-if src == "Upload photo":
-    up = st.file_uploader("Choose an image", type=["jpg","jpeg","png","webp"])
-    if up is not None:
-        image = Image.open(up).convert("RGB")
-        image = ImageOps.exif_transpose(image)
+    s.update(label="Checking known varieties…")
+    vdf = load_varieties()
+    alert = None
+    if not vdf.empty:
+        hits = vdf[
+            (vdf["country"]==country) &
+            (vdf["denomination"]==denom) &
+            (vdf["year"]==str(year)) &
+            ((vdf["mint"]==mint) | (vdf["mint"]==""))
+        ]
+        if not hits.empty:
+            alert = hits.iloc[0].to_dict()
+
+    s.update(label="Done", state="complete")
+
+colA, colB = st.columns(2)
+with colA:
+    st.metric("Denomination", denom.title())
+    st.metric("Year", str(year))
+with colB:
+    st.metric("Mint", mint.upper() or "—")
+    st.metric("Grade (est.)", grade)
+
+if val is None:
+    st.warning("No price found in your guide for this guess. You can add rows to price_guide.csv.")
 else:
-    shot = st.camera_input("Take a photo")
-    if shot is not None:
-        image = Image.open(shot).convert("RGB")
-        image = ImageOps.exif_transpose(image)
+    tag = verdict_from_price(val, grade)
+    low, high = val*0.85, val*1.15
+    st.success(f"Estimate: **${val:,.2f}** (range ${low:,.2f}–${high:,.2f}) — **{tag}**")
 
-if image is not None:
-    st.image(image, caption="Selected image", use_container_width=True)
-else:
-    st.info("Add a photo to continue.")
+if alert:
+    st.warning(
+        f"**Variety alert:** {alert.get('variety','').title()} — {alert.get('markers','')}\n\n"
+        f"Reference: {alert.get('ref','')}",
+        icon="🔎"
+    )
 
-st.subheader("2) Appraisal inputs")
-col1, col2 = st.columns(2)
-with col1:
-    country = st.text_input("Country", "united states")
-    denom = st.text_input("Denomination", "penny")
-    year  = st.text_input("Year", "2022")
-with col2:
-    mint  = st.text_input("Mint (optional)", "d")
-    grade = st.selectbox("Grade", GRADE_ORDER, index=GRADE_ORDER.index("XF"))
-
-if st.button("Appraise", use_container_width=True):
-    df = load_guide()
-    if df is None:
-        st.error("No valid price_guide.csv. Expected columns: country, denomination, year, mint, grade, price")
-    else:
-        price = lookup_price(df, country=country, denom=denom, year=year, mint=mint, grade=grade)
-        verdict, note = verdict_from_price(price)
-        if price is None:
-            st.error(note)
+# Optional: quick re-appraise controls (only if guess is off)
+with st.expander("Adjust guess & re-appraise (optional)"):
+    denom2 = st.selectbox("Denomination", ["penny","nickel","dime","quarter","half dollar","dollar","morgan dollar","peace dollar"], index=["penny","nickel","dime","quarter","half dollar","dollar","morgan dollar","peace dollar"].index(denom) if denom in ["penny","nickel","dime","quarter","half dollar","dollar","morgan dollar","peace dollar"] else 3)
+    year2  = st.text_input("Year", str(year))
+    mint2  = st.text_input("Mint (optional)", mint)
+    grade2 = st.selectbox("Grade", GRADE_ORDER, index=GRADE_ORDER.index(grade) if grade in GRADE_ORDER else 3)
+    if st.button("Re-appraise"):
+        row2 = pick_row(guide, country, denom2, year2, mint2, grade2)
+        val2 = float(row2["price"]) if row2 and not pd.isna(row2.get("price")) else None
+        if val2 is None:
+            st.error("Still not in guide. Add a row to price_guide.csv.")
         else:
-            st.success(f"Estimate: ${price:,.2f}")
-            st.info(f"Verdict: **{verdict}** — {note}")
+            tag2 = verdict_from_price(val2, grade2)
+            low2, high2 = val2*0.85, val2*1.15
+            st.success(f"Estimate: **${val2:,.2f}** (range ${low2:,.2f}–${high2:,.2f}) — **{tag2}**")
