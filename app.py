@@ -6,10 +6,8 @@ if cand.empty: return None. return cand.iloc[0].to_dict()
     if value >= 100: return "Good 💎", "Potentially valuable!"
     if value >= 10: return "Maybe 🤔", "Worth a closer look."
     return "Common 💤", "Low resale value."
-
 # ---------------- UI ----------------
 st.title(APP_NAME)
-
 st.header("1) Add a coin photo")
 src = st.radio("Source", ["Upload", "Camera"], horizontal=True)
 image = None
@@ -25,7 +23,7 @@ if image is not None:
     image = ImageOps.exif_transpose(image)
     st.image(image, caption="Your coin", use_column_width=True)
 
-    # OCR
+     # OCR
     text = pytesseract.image_to_string(image)
     st.caption(f"OCR text detected: `{text}`")
     # crude guesses
